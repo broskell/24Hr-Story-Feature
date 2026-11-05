@@ -39,7 +39,7 @@ body {
   font-weight: 700;
 }
 
-.stories-list {
+.story-tray {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -51,15 +51,14 @@ body {
 }
 
 .story-add-btn,
-.story-thumb {
+.story-circle {
   flex-shrink: 0;
   width: 72px;
   height: 72px;
   border-radius: 50%;
-  border: none;
   padding: 0;
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition: transform 0.15s ease;
 }
 
 .story-add-btn {
@@ -73,7 +72,6 @@ body {
 .story-add-btn:hover {
   transform: scale(1.05);
   border-color: #999;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
 }
 
 .add-icon {
@@ -83,17 +81,38 @@ body {
   color: #ccc;
 }
 
-.story-thumb {
-  background: #222;
-  border: 3px solid #e1306c;
-  overflow: hidden;
+.story-circle {
+  border: none;
+  background: transparent;
 }
 
-.story-thumb:hover {
+.story-circle:hover {
   transform: scale(1.05);
 }
 
-.story-thumb img {
+.story-ring {
+  padding: 3px;
+  border-radius: 50%;
+}
+
+.ring-unseen {
+  background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
+}
+
+.ring-seen {
+  background: #555;
+}
+
+.story-ring__inner {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid #0f0f0f;
+}
+
+.story-ring__thumb {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -132,40 +151,32 @@ body {
   color: #777;
 }
 
-.app-message {
-  margin-top: 1rem;
-  padding: 0.75rem 1rem;
-  border-radius: 8px;
-  background: #3d1f1f;
-  color: #ffb4b4;
+.upload-error {
+  margin: 0.75rem 0 0;
   font-size: 0.875rem;
+  color: #ffb4b4;
 }
 
-.app-message--info {
-  background: #1f2d3d;
-  color: #b4d4ff;
+.upload-error[hidden] {
+  display: none;
 }
 
-/* Viewer */
-.story-viewer {
+.viewer {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: rgba(0, 0, 0, 0.95);
+}
+
+.viewer-backdrop {
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.92);
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.25s ease;
 }
 
-.story-viewer.is-open {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.viewer-inner {
+.viewer-frame {
   position: relative;
   width: 100%;
   max-width: 420px;
@@ -177,16 +188,15 @@ body {
 }
 
 @media (min-width: 480px) {
-  .viewer-inner {
+  .viewer-frame {
     height: 90vh;
     max-height: 820px;
     border-radius: 12px;
     overflow: hidden;
-    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
   }
 }
 
-.progress-container {
+.progress-segments {
   display: flex;
   gap: 4px;
   padding: 10px 10px 6px;
@@ -205,15 +215,15 @@ body {
   overflow: hidden;
 }
 
-.progress-fill {
+.progress-segment__fill {
+  display: block;
   height: 100%;
   width: 0%;
   background: #fff;
   border-radius: 2px;
-  transition: none;
 }
 
-.progress-segment.is-done .progress-fill {
+.progress-segment.is-complete .progress-segment__fill {
   width: 100%;
 }
 
@@ -231,13 +241,6 @@ body {
   font-size: 1.5rem;
   line-height: 1;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.viewer-close:hover {
-  background: rgba(0, 0, 0, 0.65);
 }
 
 .viewer-media {
@@ -250,31 +253,12 @@ body {
   background: #000;
 }
 
-.story-image {
+.viewer-image {
   max-width: 100%;
   max-height: 100%;
-  width: auto;
-  height: auto;
   object-fit: contain;
   user-select: none;
-  -webkit-user-drag: none;
-}
-
-.tap-zone {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 35%;
-  z-index: 2;
-  cursor: pointer;
-}
-
-.tap-prev {
-  left: 0;
-}
-
-.tap-next {
-  right: 0;
+  pointer-events: none;
 }
 
 .viewer-footer {
@@ -282,6 +266,7 @@ body {
   padding: 12px 12px max(12px, env(safe-area-inset-bottom));
   background: linear-gradient(to top, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.75));
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 6;
 }
 
 .viewer-actions {
@@ -296,17 +281,11 @@ body {
   background: transparent;
   cursor: pointer;
   padding: 4px;
-  line-height: 1;
 }
 
 .like-btn .heart {
   font-size: 1.75rem;
   color: #e1306c;
-  transition: transform 0.12s ease;
-}
-
-.like-btn:active .heart {
-  transform: scale(1.2);
 }
 
 .like-count {
@@ -341,11 +320,6 @@ body {
 
 .comments-list li {
   padding: 0.35rem 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.comments-list li:last-child {
-  border-bottom: none;
 }
 
 .comment-author {
@@ -369,23 +343,12 @@ body {
   font-size: 0.875rem;
 }
 
-.comment-input:focus {
-  outline: 2px solid #e1306c;
-  outline-offset: 1px;
-}
-
 .comment-submit {
-  flex-shrink: 0;
   padding: 0.55rem 1rem;
   border: none;
   border-radius: 20px;
   background: #e1306c;
   color: #fff;
   font-weight: 600;
-  font-size: 0.875rem;
   cursor: pointer;
-}
-
-.comment-submit:hover {
-  background: #c13584;
 }

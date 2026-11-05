@@ -16,53 +16,50 @@
     </header>
 
     <section class="stories-section" aria-label="Your stories">
-      <div id="stories-list" class="stories-list">
+      <div id="story-tray" class="story-tray">
         <button type="button" id="add-story-btn" class="story-add-btn" aria-label="Add story">
           <span class="add-icon">+</span>
         </button>
       </div>
-      <input type="file" id="story-file-input" class="visually-hidden" accept="image/*" aria-hidden="true">
+      <input type="file" id="file-input" class="visually-hidden" accept="image/*">
     </section>
 
-    <!-- Shown briefly when picking duration before/after file -->
-    <div id="upload-panel" class="upload-panel" hidden>
+    <div class="upload-panel">
       <label for="story-duration">Story duration (seconds)</label>
       <input type="number" id="story-duration" min="15" max="60" value="15" step="1">
-      <p class="upload-hint">Default 15s. You can increase up to 60s before uploading.</p>
+      <p class="upload-hint">Default 15s. Increase up to 60s before you upload.</p>
+      <p id="upload-error" class="upload-error" hidden></p>
     </div>
-
-    <p id="app-message" class="app-message" role="status" aria-live="polite" hidden></p>
   </main>
 
-  <!-- Fullscreen story viewer -->
-  <div id="story-viewer" class="story-viewer" hidden aria-modal="true" role="dialog" aria-label="Story viewer">
-    <div class="viewer-inner">
-      <div id="progress-container" class="progress-container" aria-hidden="true"></div>
+  <div id="viewer" class="viewer" hidden aria-modal="true" role="dialog" aria-label="Story viewer">
+    <div id="viewer-backdrop" class="viewer-backdrop">
+      <div id="viewer-frame" class="viewer-frame">
+        <div id="progress-segments" class="progress-segments" aria-hidden="true"></div>
 
-      <button type="button" id="viewer-close" class="viewer-close" aria-label="Close story">&times;</button>
+        <button type="button" id="viewer-close" class="viewer-close" aria-label="Close story">&times;</button>
 
-      <div class="viewer-media">
-        <img id="story-image" class="story-image" src="" alt="Story">
-        <div id="tap-prev" class="tap-zone tap-prev" aria-label="Previous story"></div>
-        <div id="tap-next" class="tap-zone tap-next" aria-label="Next story"></div>
-      </div>
-
-      <div class="viewer-footer">
-        <div class="viewer-actions">
-          <button type="button" id="like-btn" class="like-btn" aria-label="Like story">
-            <span class="heart" aria-hidden="true">&#9829;</span>
-          </button>
-          <span id="like-count" class="like-count">0</span>
+        <div class="viewer-media">
+          <img id="viewer-image" class="viewer-image" src="" alt="Story">
         </div>
 
-        <div class="comments-block">
-          <p id="comment-empty" class="comment-empty">No comments yet</p>
-          <ul id="comments-list" class="comments-list"></ul>
-          <form id="comment-form" class="comment-form">
-            <input type="text" id="comment-input" class="comment-input" placeholder="Add a comment…"
-              maxlength="250" autocomplete="off">
-            <button type="submit" class="comment-submit">Post</button>
-          </form>
+        <div class="viewer-footer">
+          <div class="viewer-actions">
+            <button type="button" id="like-btn" class="like-btn" aria-label="Like story">
+              <span class="heart" aria-hidden="true">&#9829;</span>
+            </button>
+            <span id="like-count" class="like-count">0</span>
+          </div>
+
+          <div class="comments-block">
+            <p id="comment-empty" class="comment-empty">No comments yet</p>
+            <ul id="comments-list" class="comments-list"></ul>
+            <form id="comment-form" class="comment-form">
+              <input type="text" id="comment-input" class="comment-input" placeholder="Add a comment…"
+                maxlength="250" autocomplete="off">
+              <button type="submit" class="comment-submit">Post</button>
+            </form>
+          </div>
         </div>
       </div>
     </div>

@@ -1,101 +1,38 @@
-const STORAGE_KEY = 'stories_app_data';
+const STORAGE_KEY = "stories:v1";
 const EXPIRY_MS = 24 * 60 * 60 * 1000;
+const MAX_WIDTH = 1080;
+const MAX_HEIGHT = 1920;
 const DEFAULT_DURATION_SEC = 15;
 const MIN_DURATION_SEC = 15;
 const MAX_DURATION_SEC = 60;
-const MAX_WIDTH = 1080;
-const MAX_HEIGHT = 1920;
 const MAX_COMMENT_LENGTH = 250;
-const COMMENT_AUTHOR = 'You';
+const COMMENT_AUTHOR = "You";
 const SWIPE_THRESHOLD = 50;
 
-const storiesListEl = document.getElementById('stories-list');
-const addStoryBtn = document.getElementById('add-story-btn');
-const fileInput = document.getElementById('story-file-input');
-const uploadPanel = document.getElementById('upload-panel');
-const durationInput = document.getElementById('story-duration');
-const appMessage = document.getElementById('app-message');
-
-const storyViewer = document.getElementById('story-viewer');
-const viewerClose = document.getElementById('viewer-close');
-const progressContainer = document.getElementById('progress-container');
-const storyImage = document.getElementById('story-image');
-const tapPrev = document.getElementById('tap-prev');
-const tapNext = document.getElementById('tap-next');
-const likeBtn = document.getElementById('like-btn');
-const likeCountEl = document.getElementById('like-count');
-const commentsList = document.getElementById('comments-list');
-const commentEmpty = document.getElementById('comment-empty');
-const commentForm = document.getElementById('comment-form');
-const commentInput = document.getElementById('comment-input');
-
-let viewerOpen = false;
-let currentIndex = 0;
-let storiesInViewer = [];
-let animationFrameId = null;
-let timerStartMs = 0;
-let pausedElapsedMs = 0;
-let timerPaused = false;
+let viewerStack = [];
+let viewerIndex = 0;
+let timerId = null;
+let timerStartedAt = 0;
+let timerElapsedBeforePause = 0;
+let isTimerPaused = false;
 let touchStartX = 0;
 let touchStartY = 0;
-
-const showMessage = (text, isInfo = false) => {
-  appMessage.textContent = text;
-  appMessage.hidden = false;
-  appMessage.classList.toggle('app-message--info', isInfo);
-  clearTimeout(showMessage._timer);
-  showMessage._timer = setTimeout(() => {
-    appMessage.hidden = true;
-  }, 5000);
-};
+let didSwipe = false;
 
 const loadStories = () => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  return Array.isArray(data) ? data : [];
 };
 
 const saveStories = (stories) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
     return true;
-  } catch {
-    showMessage('Storage is full. Remove old stories or use a smaller image.');
+  } catch (error) {
+    showUploadError("Storage is full. Remove old stories or use a smaller image.");
     return false;
   }
 };
-
-const migrateStory = (story) => ({
-  ...story,
-  durationSeconds: story.durationSeconds ?? DEFAULT_DURATION_SEC,
-  likeCount: typeof story.likeCount === 'number' ? story.likeCount : 0,
-  comments: Array.isArray(story.comments) ? story.comments : [],
-});
-
-const removeExpiredStories = () => {
-  const now = Date.now();
-  const stories = loadStories().map(migrateStory);
-  const active = stories.filter((s) => s.expiresAt > now);
-  if (active.length !== stories.length) {
-    saveStories(active);
-  }
-  return active;
-};
-
-const getActiveStories = () => {
-  const active = removeExpiredStories();
-  return [...active].sort((a, b) => a.createdAt - b.createdAt);
-};
-
-const createStoryId = () =>
-  typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 const clampDuration = (value) => {
   const num = Number(value);
@@ -103,394 +40,550 @@ const clampDuration = (value) => {
   return Math.min(MAX_DURATION_SEC, Math.max(MIN_DURATION_SEC, Math.round(num)));
 };
 
-const validateImageFile = (file) => {
-  if (!file || !file.type.startsWith('image/')) {
-    return false;
-  }
-  return true;
+const createStory = (base64, durationSeconds) => ({
+  id: Date.now(),
+  base64,
+  createdAt: Date.now(),
+  seen: false,
+  durationSeconds: clampDuration(durationSeconds),
+  likeCount: 0,
+  comments: [],
+});
+
+const addStory = (story) => {
+  const stories = [story].concat(loadStories());
+  saveStories(stories);
+  return stories;
 };
 
-const resizeImage = (file) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Could not read file'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('Invalid image'));
-      img.onload = () => {
-        let { width, height } = img;
-        const ratio = Math.min(MAX_WIDTH / width, MAX_HEIGHT / height, 1);
-        width = Math.round(width * ratio);
-        height = Math.round(height * ratio);
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
-      };
-      img.src = reader.result;
+const markStorySeen = (id) => {
+  const stories = loadStories().map((story) => {
+    if (story.id !== id) return story;
+    return {
+      id: story.id,
+      base64: story.base64,
+      createdAt: story.createdAt,
+      seen: true,
+      durationSeconds: story.durationSeconds || DEFAULT_DURATION_SEC,
+      likeCount: story.likeCount || 0,
+      comments: Array.isArray(story.comments) ? story.comments : [],
     };
+  });
+  saveStories(stories);
+  return stories;
+};
+
+const removeExpiredStories = () => {
+  const now = Date.now();
+  const active = loadStories().filter(
+    (story) => now - story.createdAt < EXPIRY_MS
+  );
+  saveStories(active);
+  return active;
+};
+
+const showUploadError = (message) => {
+  const el = document.getElementById("upload-error");
+  el.textContent = message;
+  el.hidden = false;
+};
+
+const hideUploadError = () => {
+  document.getElementById("upload-error").hidden = true;
+};
+
+const readFileAsDataURL = (file) =>
+  new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => resolve(null);
     reader.readAsDataURL(file);
   });
 
-const addStory = (imageData, durationSeconds) => {
-  const now = Date.now();
-  const story = {
-    id: createStoryId(),
-    imageData,
-    createdAt: now,
-    expiresAt: now + EXPIRY_MS,
-    durationSeconds: clampDuration(durationSeconds),
-    likeCount: 0,
-    comments: [],
-  };
-  const stories = getActiveStories();
-  stories.push(story);
-  if (saveStories(stories)) {
-    showMessage('Story added!', true);
-  }
-};
+// Center-crop to 9:16, then scale down to fit inside 1080×1920.
+const cropImage = (src) =>
+  new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const targetRatio = 9 / 16;
+      let sourceWidth = img.width;
+      let sourceHeight = img.height;
+      let sourceX = 0;
+      let sourceY = 0;
 
-const renderStories = () => {
-  const existingThumbs = storiesListEl.querySelectorAll('.story-thumb');
-  existingThumbs.forEach((el) => el.remove());
+      const imageRatio = sourceWidth / sourceHeight;
 
-  const stories = getActiveStories();
-  stories.forEach((story, index) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'story-thumb';
-    btn.setAttribute('aria-label', `View story ${index + 1}`);
-    btn.dataset.index = String(index);
+      if (imageRatio > targetRatio) {
+        sourceWidth = sourceHeight * targetRatio;
+        sourceX = (img.width - sourceWidth) / 2;
+      } else if (imageRatio < targetRatio) {
+        sourceHeight = sourceWidth / targetRatio;
+        sourceY = (img.height - sourceHeight) / 2;
+      }
 
-    const img = document.createElement('img');
-    img.src = story.imageData;
-    img.alt = '';
-    btn.appendChild(img);
+      let outWidth = sourceWidth;
+      let outHeight = sourceHeight;
 
-    btn.addEventListener('click', () => openStory(index));
-    storiesListEl.appendChild(btn);
+      if (outWidth > MAX_WIDTH || outHeight > MAX_HEIGHT) {
+        const scale = Math.min(MAX_WIDTH / outWidth, MAX_HEIGHT / outHeight);
+        outWidth = Math.floor(outWidth * scale);
+        outHeight = Math.floor(outHeight * scale);
+      } else {
+        outWidth = Math.floor(outWidth);
+        outHeight = Math.floor(outHeight);
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = outWidth;
+      canvas.height = outHeight;
+
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(
+        img,
+        sourceX,
+        sourceY,
+        sourceWidth,
+        sourceHeight,
+        0,
+        0,
+        outWidth,
+        outHeight
+      );
+
+      resolve(canvas.toDataURL("image/jpeg", 0.92));
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
   });
+
+const createStoryCircle = (story) => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className =
+    "story-circle story-ring " + (story.seen ? "ring-seen" : "ring-unseen");
+  button.dataset.storyId = String(story.id);
+  button.setAttribute("aria-label", "View story");
+
+  const inner = document.createElement("span");
+  inner.className = "story-ring__inner";
+
+  const img = document.createElement("img");
+  img.className = "story-ring__thumb";
+  img.src = story.base64;
+  img.alt = "";
+  img.width = 64;
+  img.height = 64;
+
+  inner.appendChild(img);
+  button.appendChild(inner);
+  return button;
 };
 
-const clearStoryTimer = () => {
-  if (animationFrameId !== null) {
-    cancelAnimationFrame(animationFrameId);
-    animationFrameId = null;
+const renderTray = (stories) => {
+  const tray = document.getElementById("story-tray");
+  Array.from(tray.querySelectorAll(".story-circle")).forEach((circle) =>
+    circle.remove()
+  );
+  stories.forEach((story) => tray.appendChild(createStoryCircle(story)));
+};
+
+const processUpload = async (file) => {
+  hideUploadError();
+  if (!file || !file.type.startsWith("image/")) {
+    showUploadError("Please choose a valid image file.");
+    return;
   }
-  timerPaused = false;
-  pausedElapsedMs = 0;
+
+  const durationSeconds = clampDuration(
+    document.getElementById("story-duration").value
+  );
+
+  const base64 = await readFileAsDataURL(file);
+  if (!base64) return;
+
+  const cropped = await cropImage(base64);
+  if (!cropped) {
+    showUploadError("Could not process this image. Try another file.");
+    return;
+  }
+
+  addStory(createStory(cropped, durationSeconds));
+  renderTray(loadStories());
 };
 
-const getCurrentStory = () => storiesInViewer[currentIndex];
+const handleFileSelect = (event) => {
+  const file = event.target.files[0];
+  processUpload(file);
+  event.target.value = "";
+};
 
-const updateActiveProgressFill = (progress01) => {
-  const segments = progressContainer.querySelectorAll('.progress-segment');
-  const active = segments[currentIndex];
+const handleAddClick = () => {
+  document.getElementById("file-input").click();
+};
+
+const getStackFrom = (startId) => {
+  const stories = loadStories();
+  const startIndex = stories.findIndex(
+    (story) => story.id === Number(startId)
+  );
+  if (startIndex === -1) return [];
+  return stories.slice(startIndex);
+};
+
+const getDurationMsForStory = (story) => {
+  const seconds = story.durationSeconds || DEFAULT_DURATION_SEC;
+  return seconds * 1000;
+};
+
+const stopTimer = () => {
+  if (timerId !== null) {
+    clearInterval(timerId);
+    timerId = null;
+  }
+};
+
+const getElapsedMs = () => {
+  if (isTimerPaused) {
+    return timerElapsedBeforePause;
+  }
+  return timerElapsedBeforePause + (Date.now() - timerStartedAt);
+};
+
+const updateActiveProgress = () => {
+  const active = document.querySelector(
+    "#progress-segments .progress-segment.is-active .progress-segment__fill"
+  );
   if (!active) return;
-  const fill = active.querySelector('.progress-fill');
-  if (fill) {
-    fill.style.width = `${Math.min(100, progress01 * 100)}%`;
-  }
+
+  const story = viewerStack[viewerIndex];
+  if (!story) return;
+
+  const durationMs = getDurationMsForStory(story);
+  const elapsed = getElapsedMs();
+  let percent = (elapsed / durationMs) * 100;
+  if (percent > 100) percent = 100;
+  active.style.width = percent + "%";
 };
 
-const renderProgressBars = () => {
-  progressContainer.innerHTML = '';
-  storiesInViewer.forEach((_, index) => {
-    const segment = document.createElement('div');
-    segment.className = 'progress-segment';
-    if (index < currentIndex) {
-      segment.classList.add('is-done');
+const renderProgressSegments = () => {
+  const container = document.getElementById("progress-segments");
+  container.innerHTML = "";
+
+  viewerStack.forEach((story, index) => {
+    const segment = document.createElement("div");
+    segment.className = "progress-segment";
+
+    if (index < viewerIndex) {
+      segment.className = "progress-segment is-complete";
+    } else if (index === viewerIndex) {
+      segment.className = "progress-segment is-active";
     }
-    const fill = document.createElement('div');
-    fill.className = 'progress-fill';
-    if (index < currentIndex) {
-      fill.style.width = '100%';
+
+    const fill = document.createElement("span");
+    fill.className = "progress-segment__fill";
+    if (index < viewerIndex) {
+      fill.style.width = "100%";
+    } else if (index === viewerIndex) {
+      fill.style.width = "0%";
     }
     segment.appendChild(fill);
-    progressContainer.appendChild(segment);
+    container.appendChild(segment);
   });
+};
+
+const startTimer = () => {
+  stopTimer();
+  isTimerPaused = false;
+  timerStartedAt = Date.now();
+  updateActiveProgress();
+
+  timerId = setInterval(() => {
+    if (isTimerPaused) return;
+
+    updateActiveProgress();
+    const story = viewerStack[viewerIndex];
+    if (!story) return;
+
+    const elapsed = getElapsedMs();
+    if (elapsed >= getDurationMsForStory(story)) {
+      goNext();
+    }
+  }, 50);
+};
+
+const pauseTimer = () => {
+  if (isTimerPaused) return;
+  isTimerPaused = true;
+  timerElapsedBeforePause = getElapsedMs();
+  stopTimer();
+};
+
+const resumeTimer = () => {
+  if (!isTimerPaused) return;
+  isTimerPaused = false;
+  timerStartedAt = Date.now();
+  startTimer();
 };
 
 const renderComments = (story) => {
-  commentsList.innerHTML = '';
-  const list = story.comments ?? [];
-  commentEmpty.hidden = list.length > 0;
+  const listEl = document.getElementById("comments-list");
+  const emptyEl = document.getElementById("comment-empty");
+  listEl.innerHTML = "";
 
-  for (const comment of list) {
-    const li = document.createElement('li');
-    const author = document.createElement('span');
-    author.className = 'comment-author';
-    author.textContent = `${comment.author}:`;
-    const text = document.createElement('span');
+  const comments = Array.isArray(story.comments) ? story.comments : [];
+  emptyEl.hidden = comments.length > 0;
+
+  comments.forEach((comment) => {
+    const li = document.createElement("li");
+    const author = document.createElement("span");
+    author.className = "comment-author";
+    author.textContent = comment.author + ":";
+    const text = document.createElement("span");
     text.textContent = comment.text;
     li.appendChild(author);
     li.appendChild(text);
-    commentsList.appendChild(li);
-  }
+    listEl.appendChild(li);
+  });
 };
 
-const syncViewerUi = () => {
-  const story = getCurrentStory();
+const refreshLikeAndComments = () => {
+  const story = viewerStack[viewerIndex];
   if (!story) return;
 
-  storyImage.src = story.imageData;
-  likeCountEl.textContent = String(story.likeCount ?? 0);
-  renderProgressBars();
+  document.getElementById("like-count").textContent = String(
+    story.likeCount || 0
+  );
   renderComments(story);
 };
 
-const tickStoryTimer = () => {
-  if (!viewerOpen || timerPaused) return;
-
-  const story = getCurrentStory();
-  if (!story) return;
-
-  const durationMs = (story.durationSeconds ?? DEFAULT_DURATION_SEC) * 1000;
-  const elapsed = pausedElapsedMs + (performance.now() - timerStartMs);
-  const progress = elapsed / durationMs;
-  updateActiveProgressFill(progress);
-
-  if (elapsed >= durationMs) {
-    nextStory();
-    return;
-  }
-
-  animationFrameId = requestAnimationFrame(tickStoryTimer);
-};
-
-const startStoryTimer = () => {
-  clearStoryTimer();
-  timerStartMs = performance.now();
-  pausedElapsedMs = 0;
-  timerPaused = false;
-  animationFrameId = requestAnimationFrame(tickStoryTimer);
-};
-
-const pauseStoryTimer = () => {
-  if (!viewerOpen || timerPaused) return;
-  timerPaused = true;
-  pausedElapsedMs += performance.now() - timerStartMs;
-  if (animationFrameId !== null) {
-    cancelAnimationFrame(animationFrameId);
-    animationFrameId = null;
-  }
-};
-
-const resumeStoryTimer = () => {
-  if (!viewerOpen || !timerPaused) return;
-  timerPaused = false;
-  timerStartMs = performance.now();
-  animationFrameId = requestAnimationFrame(tickStoryTimer);
-};
-
-const goToStory = (index) => {
-  if (index < 0 || index >= storiesInViewer.length) return;
-  currentIndex = index;
-  commentInput.value = '';
-  syncViewerUi();
-  startStoryTimer();
-};
-
-const nextStory = () => {
-  if (currentIndex >= storiesInViewer.length - 1) {
-    closeStory();
-    return;
-  }
-  goToStory(currentIndex + 1);
-};
-
-const previousStory = () => {
-  if (currentIndex <= 0) {
-    goToStory(0);
-    return;
-  }
-  goToStory(currentIndex - 1);
-};
-
-const openStory = (index) => {
-  storiesInViewer = getActiveStories();
-  if (storiesInViewer.length === 0) return;
-  if (index < 0 || index >= storiesInViewer.length) return;
-
-  viewerOpen = true;
-  currentIndex = index;
-  storyViewer.hidden = false;
-  requestAnimationFrame(() => storyViewer.classList.add('is-open'));
-
-  commentInput.value = '';
-  syncViewerUi();
-  startStoryTimer();
-};
-
-const closeStory = () => {
-  clearStoryTimer();
-  viewerOpen = false;
-  storyViewer.classList.remove('is-open');
-  storyImage.src = '';
-  commentInput.value = '';
-  setTimeout(() => {
-    storyViewer.hidden = true;
-  }, 250);
-};
-
-const updateStoryInStorage = (storyId, updater) => {
-  const stories = getActiveStories();
-  const idx = stories.findIndex((s) => s.id === storyId);
-  if (idx === -1) return null;
-  updater(stories[idx]);
-  saveStories(stories);
-  const inViewerIdx = storiesInViewer.findIndex((s) => s.id === storyId);
-  if (inViewerIdx !== -1) {
-    storiesInViewer[inViewerIdx] = { ...stories.find((s) => s.id === storyId) };
-  }
-  return stories[idx];
-};
-
-const handleLikeTap = () => {
-  const story = getCurrentStory();
-  if (!story) return;
-
-  const updated = updateStoryInStorage(story.id, (s) => {
-    s.likeCount = (s.likeCount ?? 0) + 1;
+const incrementLike = (storyId) => {
+  const stories = loadStories().map((story) => {
+    if (story.id !== storyId) return story;
+    return {
+      ...story,
+      likeCount: (story.likeCount || 0) + 1,
+    };
   });
-  if (updated) {
-    likeCountEl.textContent = String(updated.likeCount);
+  saveStories(stories);
+
+  const updated = stories.find((s) => s.id === storyId);
+  if (updated && viewerStack[viewerIndex]) {
+    viewerStack[viewerIndex] = updated;
   }
+  return updated;
 };
 
-const handleCommentSubmit = (event) => {
-  event.preventDefault();
-  const story = getCurrentStory();
-  if (!story) return;
-
-  const text = commentInput.value.trim();
-  if (!text) return;
-  if (text.length > MAX_COMMENT_LENGTH) {
-    showMessage(`Comments are limited to ${MAX_COMMENT_LENGTH} characters.`);
-    return;
-  }
-
+const addComment = (storyId, text) => {
   const newComment = {
-    id: createStoryId(),
+    id: Date.now(),
     author: COMMENT_AUTHOR,
     text,
     createdAt: Date.now(),
   };
 
-  updateStoryInStorage(story.id, (s) => {
-    if (!Array.isArray(s.comments)) s.comments = [];
-    s.comments.push(newComment);
+  const stories = loadStories().map((story) => {
+    if (story.id !== storyId) return story;
+    const comments = Array.isArray(story.comments) ? story.comments : [];
+    return {
+      ...story,
+      comments: comments.concat([newComment]),
+    };
   });
+  saveStories(stories);
 
-  const refreshed = getCurrentStory();
-  if (refreshed) renderComments(refreshed);
-  commentInput.value = '';
-  resumeStoryTimer();
+  const updated = stories.find((s) => s.id === storyId);
+  if (updated && viewerStack[viewerIndex]) {
+    viewerStack[viewerIndex] = updated;
+  }
+  return updated;
 };
 
-const handleImageUpload = async (event) => {
-  const file = event.target.files?.[0];
-  fileInput.value = '';
-  if (!file) return;
+const handleLikeClick = (event) => {
+  event.stopPropagation();
+  const story = viewerStack[viewerIndex];
+  if (!story) return;
+  incrementLike(story.id);
+  refreshLikeAndComments();
+};
 
-  if (!validateImageFile(file)) {
-    showMessage('Please choose a valid image file.');
+const handleCommentSubmit = (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const story = viewerStack[viewerIndex];
+  if (!story) return;
+
+  const input = document.getElementById("comment-input");
+  const text = input.value.trim();
+  if (!text) return;
+  if (text.length > MAX_COMMENT_LENGTH) {
+    showUploadError(
+      "Comments are limited to " + MAX_COMMENT_LENGTH + " characters."
+    );
     return;
   }
 
-  const durationSeconds = clampDuration(durationInput.value);
+  addComment(story.id, text);
+  input.value = "";
+  refreshLikeAndComments();
+  resumeTimer();
+};
 
-  try {
-    const imageData = await resizeImage(file);
-    addStory(imageData, durationSeconds);
-    renderStories();
-  } catch {
-    showMessage('Could not process that image. Try another file.');
+const showStoryAt = (index) => {
+  viewerIndex = index;
+  const story = viewerStack[viewerIndex];
+  if (!story) {
+    closeViewer();
+    return;
   }
+
+  timerElapsedBeforePause = 0;
+  document.getElementById("viewer-image").src = story.base64;
+  markStorySeen(story.id);
+  renderTray(loadStories());
+
+  const fresh = loadStories().find((s) => s.id === story.id);
+  if (fresh) viewerStack[viewerIndex] = fresh;
+
+  refreshLikeAndComments();
+  renderProgressSegments();
+  startTimer();
 };
 
-const handleAddClick = () => {
-  uploadPanel.hidden = false;
-  fileInput.click();
+const goNext = () => {
+  if (viewerIndex >= viewerStack.length - 1) {
+    closeViewer();
+    return;
+  }
+  showStoryAt(viewerIndex + 1);
 };
 
-const handleSwipeEnd = (endX, endY) => {
-  const diffX = endX - touchStartX;
-  const diffY = endY - touchStartY;
-  if (Math.abs(diffX) < SWIPE_THRESHOLD) return;
-  if (Math.abs(diffY) > Math.abs(diffX)) return;
+const goPrev = () => {
+  if (viewerIndex <= 0) return;
+  showStoryAt(viewerIndex - 1);
+};
 
-  if (diffX < 0) {
-    nextStory();
+const openViewer = (startId) => {
+  viewerStack = getStackFrom(startId);
+  if (viewerStack.length === 0) return;
+
+  viewerIndex = 0;
+  document.getElementById("comment-input").value = "";
+  document.getElementById("viewer").hidden = false;
+  showStoryAt(0);
+};
+
+const closeViewer = () => {
+  stopTimer();
+  isTimerPaused = false;
+  timerElapsedBeforePause = 0;
+  viewerStack = [];
+  viewerIndex = 0;
+  document.getElementById("viewer-image").src = "";
+  document.getElementById("comment-input").value = "";
+  document.getElementById("viewer").hidden = true;
+};
+
+const handleTrayClick = (event) => {
+  const circle = event.target.closest(".story-circle");
+  if (!circle) return;
+  openViewer(circle.dataset.storyId);
+};
+
+const handleFrameClick = (event) => {
+  if (document.getElementById("viewer").hidden) return;
+  if (event.target.closest("#viewer-close")) return;
+  if (event.target.closest(".viewer-footer")) return;
+  if (event.target.closest("#like-btn")) return;
+
+  if (didSwipe) {
+    didSwipe = false;
+    return;
+  }
+
+  const frame = document.getElementById("viewer-frame");
+  const rect = frame.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+
+  if (x < rect.width / 2) {
+    goPrev();
   } else {
-    previousStory();
+    goNext();
   }
+};
+
+const handleTouchStart = (event) => {
+  touchStartX = event.changedTouches[0].screenX;
+  touchStartY = event.changedTouches[0].screenY;
+};
+
+const handleTouchEnd = (event) => {
+  const dx = event.changedTouches[0].screenX - touchStartX;
+  const dy = event.changedTouches[0].screenY - touchStartY;
+
+  if (Math.abs(dx) < SWIPE_THRESHOLD) return;
+  if (Math.abs(dx) <= Math.abs(dy)) return;
+
+  didSwipe = true;
+  if (dx < 0) {
+    goNext();
+  } else {
+    goPrev();
+  }
+
+  setTimeout(() => {
+    didSwipe = false;
+  }, 100);
+};
+
+const handleCloseClick = (event) => {
+  event.stopPropagation();
+  closeViewer();
+};
+
+const handleBackdropClick = (event) => {
+  if (event.target !== event.currentTarget) return;
+  closeViewer();
+};
+
+const cleanupExpiredStories = () => {
+  const beforeCount = loadStories().length;
+  const active = removeExpiredStories();
+  if (active.length !== beforeCount) {
+    renderTray(active);
+  }
+};
+
+const bindGestures = () => {
+  const frame = document.getElementById("viewer-frame");
+  frame.addEventListener("click", handleFrameClick);
+  frame.addEventListener("touchstart", handleTouchStart, { passive: true });
+  frame.addEventListener("touchend", handleTouchEnd, { passive: true });
+};
+
+const bindEvents = () => {
+  document.getElementById("add-story-btn").addEventListener("click", handleAddClick);
+  document.getElementById("file-input").addEventListener("change", handleFileSelect);
+  document.getElementById("story-tray").addEventListener("click", handleTrayClick);
+  document.getElementById("viewer-close").addEventListener("click", handleCloseClick);
+  document.getElementById("viewer-backdrop").addEventListener("click", handleBackdropClick);
+  document.getElementById("like-btn").addEventListener("click", handleLikeClick);
+  document.getElementById("comment-form").addEventListener("submit", handleCommentSubmit);
+
+  document.getElementById("comment-input").addEventListener("focus", pauseTimer);
+  document.getElementById("comment-input").addEventListener("blur", () => {
+    resumeTimer();
+  });
+
+  bindGestures();
 };
 
 const init = () => {
+  document.getElementById("viewer").hidden = true;
   removeExpiredStories();
-  renderStories();
-
-  addStoryBtn.addEventListener('click', handleAddClick);
-  fileInput.addEventListener('change', handleImageUpload);
-
-  viewerClose.addEventListener('click', closeStory);
-  tapPrev.addEventListener('click', previousStory);
-  tapNext.addEventListener('click', nextStory);
-  likeBtn.addEventListener('click', handleLikeTap);
-  commentForm.addEventListener('submit', handleCommentSubmit);
-
-  commentInput.addEventListener('focus', pauseStoryTimer);
-  commentInput.addEventListener('blur', () => {
-    if (document.activeElement !== commentInput) {
-      resumeStoryTimer();
-    }
-  });
-
-  storyViewer.addEventListener(
-    'touchstart',
-    (e) => {
-      const touch = e.changedTouches[0];
-      touchStartX = touch.clientX;
-      touchStartY = touch.clientY;
-    },
-    { passive: true }
-  );
-
-  storyViewer.addEventListener(
-    'touchend',
-    (e) => {
-      const touch = e.changedTouches[0];
-      handleSwipeEnd(touch.clientX, touch.clientY);
-    },
-    { passive: true }
-  );
-
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      removeExpiredStories();
-      renderStories();
-      if (viewerOpen) {
-        storiesInViewer = getActiveStories();
-        if (storiesInViewer.length === 0) {
-          closeStory();
-          return;
-        }
-        if (currentIndex >= storiesInViewer.length) {
-          currentIndex = storiesInViewer.length - 1;
-        }
-        syncViewerUi();
-        startStoryTimer();
-      }
-    }
-  });
-
-  storyViewer.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeStory();
-  });
+  renderTray(loadStories());
+  bindEvents();
+  setInterval(cleanupExpiredStories, 60000);
 };
 
 init();
